@@ -1,0 +1,19 @@
+name: CI
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"  # فحص أمني أسبوعي
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt ruff bandit pip-audit
+      - run: ruff check --select F .
+      - run: bandit -q -ll -r --exclude ./venv,./__pycache__,./smoke_test.py .
+      - run: pip-audit
