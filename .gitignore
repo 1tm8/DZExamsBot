@@ -1,8 +1,18 @@
+# متغيّرات البيئة والأسرار
 .env
-venv/
-__pycache__/
+
+# مخرجات بناء Rust
+/target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# قاعدة البيانات والسجلات
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.log
-*.pyc
-.DS_Store
+
+# ملفات مؤقتة ونظام
 /tmp/
+.DS_Store

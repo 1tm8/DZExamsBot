@@ -1,13 +1,38 @@
-FROM python:3.12-slim
+# ─── مرحلة البناء ───────────────────────────────────────────────
+FROM rust:1-bookworm AS builder
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-# تشغيل بلا صلاحيات root: مستخدم مخصص يملك /app وبياناته
-RUN useradd -m -u 1000 botuser \
-    && mkdir -p /app/data /app/data/tmp \
-    && chown -R botuser:botuser /app
-COPY --chown=botuser:botuser . .
+
+# 1) بناء التبعيات وحدها في طبقة مخزّنة (تُعاد الاستفادة منها عند تغيّر الكود فقط)
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && printf '' > src/lib.rs \
+    && cargo build --release --locked \
+    && rm -rf src
+
+# 2) الكود الحقيقي
+COPY src ./src
+RUN touch src/main.rs src/lib.rs \
+    && cargo build --release --locked
+
+# ─── مرحلة التشغيل ──────────────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+
+# شهادات TLS فقط — لا حاجة لـ OpenSSL (rustls) ولا لـ Python
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1000 botuser
+
+WORKDIR /app
+COPY --from=builder /app/target/release/dzexams-bot /usr/local/bin/dzexams-bot
+RUN mkdir -p /app/data/tmp && chown -R botuser:botuser /app
 USER botuser
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
-  CMD python -c "import socket; socket.create_connection(('api.telegram.org', 443), 5)"
-CMD ["python", "bot.py"]
+
+ENV DB_PATH=/app/data/dzexams.db \
+    TMP_DIR=/app/data/tmp
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+  CMD ["dzexams-bot", "--healthcheck"]
+
+CMD ["dzexams-bot"]

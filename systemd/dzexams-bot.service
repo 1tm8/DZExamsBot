@@ -1,5 +1,5 @@
 [Unit]
-Description=DzExams Telegram Bot
+Description=DzExams Telegram Bot (Rust)
 After=network-online.target warp-svc.service
 Wants=network-online.target
 
@@ -11,11 +11,12 @@ StartLimitBurst=5
 Type=simple
 # تشغيل بلا صلاحيات root — أنشئ المستخدم وملّكه المجلد أولًا:
 #   useradd -m botuser && chown -R botuser:botuser /opt/dzexams-bot
+# ثبّت الملف التنفيذي في /opt/dzexams-bot/dzexams-bot
 # ملاحظة: تدوير WARP عبر wg-quick يحتاج root؛ بدون WARP لا أثر لهذا.
 User=botuser
 Group=botuser
 WorkingDirectory=/opt/dzexams-bot
-ExecStart=/opt/dzexams-bot/venv/bin/python bot.py
+ExecStart=/opt/dzexams-bot/dzexams-bot
 Restart=always
 RestartSec=10
 # متغيرات البيئة (أو استخدم ملف .env في مجلد المشروع)

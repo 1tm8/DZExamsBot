@@ -1,9 +1,11 @@
 .env
-venv/
-__pycache__/
-*.db
-*.log
-*.pyc
 .git
+.github
+/target/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
 /tmp/
 .DS_Store

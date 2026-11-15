@@ -2,8 +2,7 @@
 
 بوت تيليغرام يقرّب محتوى موقع [dzexams.com](https://www.dzexams.com) للتلاميذ الجزائريين: دروس، فروض، اختبارات، ومواضيع شهادات (BEM / BAC)، بتصفح بسيط بالأزرار وبحث نصي.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=dzexamsbot&repo=https://github.com/kerlif/DZExamsBot)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/kerlif/DZExamsBot)
+> **ملاحظة:** هذا الإصدار إعادة كتابة كاملة للبوت بلغة **Rust** (بدل Python). الوظائف محفوظة كما هي: التصفح الهرمي، البحث، الفهرسة الخلفية، تدوير IP، وتجاوز حماية Cloudflare.
 
 ## ماذا يفعل
 
@@ -17,7 +16,7 @@
 
 ## المتطلبات
 
-- Python 3.12+
+- سلسلة أدوات Rust (rustup / cargo) — نسخة حديثة (تتطلب ~1.96+ بسبب الاعتماديات).
 - توكن بوت تيليغرام (من [@BotFather](https://t.me/BotFather))
 - معرف تيليغرام الخاص بك (لأوامر المشرف)
 
@@ -26,11 +25,9 @@
 ```bash
 git clone https://github.com/kerlif/DZExamsBot.git
 cd DZExamsBot
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
 # ضع BOT_TOKEN و ADMIN_IDS في .env
-python bot.py
+cargo run --release
 ```
 
 ## متغيرات البيئة
@@ -40,25 +37,33 @@ python bot.py
 | `BOT_TOKEN` | توكن البوت | — (إلزامي) |
 | `ADMIN_IDS` | معرفات المشرفين (مفصولة بفاصلة) | — |
 | `DB_PATH` | مسار قاعدة البيانات SQLite | `dzexams.db` |
-| `TMP_DIR` | مجلد الملفات المؤقتة | `tmp/` |
-| `PROXY_LIST` | بروكسيات HTTP للخروج (اختياري، فاصلة) | — |
+| `TMP_DIR` | مجلد الملفات المؤقتة | `/tmp/dzexams_bot` |
+| `PROXY_LIST` | بروكسيات HTTP/SOCKS5 للخروج (اختياري، فاصلة) | — |
 | `AUTO_INDEX_LEVELS` | الأطوار المفهرسة تلقائيًا يوميًا | — (معطلة إن لم تُضبط) |
 | `AUTO_INDEX_HOUR` | ساعة الفهرسة التلقائية | `3` |
 | `SEARCH_RESULTS_LIMIT` | حد نتائج البحث | `10` |
+| `WARP_FAIL_THRESHOLD` | عتبة الحجب المتتالي قبل تدوير IP | `3` |
+| `WARP_WG_PROFILES` | أنماط ملفات WireGuard للتدوير | `/etc/wireguard/warp*.conf` |
+| `USER_DL_COOLDOWN` | مهلة بين تحميلين لنفس المستخدم (ثوانٍ) | `10` |
 
 ## الاستضافة
 
 البوت عملية دائمة (polling) مع قاعدة SQLite محلية — يحتاج منصة تشغّل عملية مستمرة وتحتفظ بملف قاعدة البيانات.
 
-| المنصة | الملفات الجاهزة | ملاحظات |
+| الطريقة | الملفات | ملاحظات |
 |---|---|---|
-| **Railway** | `railway.json` | زر النشر أعلاه. أنشئ Volume عند `/app/data` واضبط `DB_PATH=/app/data/dzexams.db` و`TMP_DIR=/app/data/tmp`. متغيرات `BOT_TOKEN` و`ADMIN_IDS` من لوحة التحكم. |
-| **Render** | `render.yaml` | زر النشر أعلاه. الخدمة Worker + قرص 1GB عند `/app/data`. خطة Starter المدفوعة مطلوبة للـ Worker. |
-| **Fly.io** | `fly.toml` + `Dockerfile` | `fly launch --no-deploy` ثم `fly volumes create dzexams_data -s 1` ثم `fly secrets set BOT_TOKEN=… ADMIN_IDS=…` ثم `fly deploy`. |
-| **Heroku** | `Procfile` + `runtime.txt` + `app.json` | يعمل كـ worker dyno. قرص Heroku مؤقت: قاعدة البيانات تُفقد عند إعادة التشغيل — أعد الفهرسة بـ `/indexall` بعد كل إعادة نشر. |
-| **VPS خاص** | `systemd/dzexams-bot.service` | أنشئ المستخدم `botuser` وملّكه المجلد (`chown -R botuser:botuser /opt/dzexams-bot`)، انسخ الملف إلى `/etc/systemd/system/`، عدّل المسارات والتوكن، ثم `systemctl enable --now dzexams-bot`. الخدمة تعمل بلا صلاحيات root. |
+| **Docker** | `Dockerfile` | بناء متعدد المراحل (rust → debian-slim). شغّل الحاوية مع حجم عند `/app/data` واضبط `BOT_TOKEN` و`ADMIN_IDS`. |
+| **VPS خاص** | `systemd/dzexams-bot.service` | ثبّت الملف التنفيذي في `/opt/dzexams-bot/dzexams-bot`، أنشئ المستخدم `botuser` وملّكه المجلد، انسخ الوحدة إلى `/etc/systemd/system/`، ثم `systemctl enable --now dzexams-bot`. تعمل بلا صلاحيات root. |
 
-**Cloudflare Workers غير مدعومة بهذه النسخة**: الـ Workers لا تشغّل عملية دائمة (polling مستحيل) ولا قرصًا محليًا لقاعدة SQLite — استضافتها تتطلب إعادة كتابة البوت على نمط webhook مع قاعدة خارجية، وهذا خارج نطاق هذا الإصدار.
+مثال Docker:
+
+```bash
+docker build -t dzexams-bot .
+docker run -d --name dzexams-bot \
+  -e BOT_TOKEN=... -e ADMIN_IDS=... \
+  -v dzexams-data:/app/data \
+  dzexams-bot
+```
 
 ## الأوامر
 
@@ -80,37 +85,46 @@ python bot.py
 - ملفات ≥ 49MB تُرسل كرابط فقط (حد تيليغرام 50MB للبوتات) — يُفحص الحجم قبل الإرسال.
 - مهلة 10 ثوانٍ بين تحميلين لنفس المستخدم (حماية من إغراق الموقع).
 - سلسلة User-Agent احتياطية: إن حُجب الأساسي (Mediapartners-Google) يُجرَّب AdsBot ثم Googlebot.
+- عند تكرار الحجب يُفعَّل تدوير IP عبر `warp-cli` أو ملفات WireGuard (`wg-quick`) أو `PROXY_LIST`.
 
 ## بنية المشروع
 
 ```
-bot.py                 # واجهة تيليغرام (الأزرار، الأوامر، الجلسات)
-catalog.py             # الأطوار، السنوات، الشعب، المواد
-config.py              # إعدادات البيئة
-service.py             # منطق التصفح والجلب
-scraper.py             # تحليل صفحات HTML
-fetcher.py             # عميل HTTP مع التخزين المؤقت
-indexer.py             # الفهرسة الخلفية وبحث FTS5
-dzenc.py               # فك ترميز روابط الموقع
-stealth_browser.py     # متصفح احتياطي (غير مستخدم حاليًا)
-warp.py                # تدوير IP عبر WARP/البروكسي عند تكرار الحجب (يستدعيه fetcher)
-smoke_test.py          # اختبار حي شامل (15 اختبارًا)
-Dockerfile             # حاوية Docker
-fly.toml               # نشر Fly.io
-railway.json           # نشر Railway
-render.yaml            # نشر Render
-Procfile / runtime.txt / app.json  # نشر Heroku
-.github/workflows/ci.yml          # فحص أسبوعي (ruff, bandit, pip-audit)
-systemd/dzexams-bot.service        # تشغيل VPS
+Cargo.toml             # تعريف الحزمة والاعتماديات
+src/main.rs            # نقطة التشغيل (+ --healthcheck / --version)
+src/lib.rs             # جذر المكتبة
+src/bot.rs             # واجهة تيليغرام (الأزرار، الأوامر، الجلسات)
+src/catalog.rs         # الأطوار، السنوات، الشعب، المواد
+src/config.rs          # إعدادات البيئة
+src/service.rs         # منطق التصفح والجلب
+src/scraper.rs         # تحليل صفحات HTML
+src/fetcher.rs         # عميل HTTP مع التخزين المؤقت وتجاوز الحماية
+src/indexer.rs         # الفهرسة الخلفية وبحث FTS5
+src/dzenc.rs           # فك ترميز روابط الموقع
+src/warp.rs            # تدوير IP عبر WARP/البروكسي عند تكرار الحجب
+Dockerfile             # حاوية Docker (بناء متعدد المراحل)
+systemd/dzexams-bot.service  # تشغيل VPS
+.github/workflows/ci.yml     # CI (fmt, clippy, test, build, audit)
 ```
 
 ## الاختبارات
 
 ```bash
-python smoke_test.py
+cargo test        # اختبارات الوحدة (فك الترميز، تحليل HTML)
+cargo clippy --all-targets -- -D warnings
 ```
 
-اختبار حي ضد الموقع (جلب، تصفح، PDF، شهادات، فهرسة وبحث). يحتاج اتصالًا بالموقع.
+## فحص الصحة
+
+```bash
+dzexams-bot --healthcheck   # يتحقّق من الاتصال بـ api.telegram.org:443
+```
+
+## تغييرات عن نسخة Python
+
+- أُعيدت الكتابة بالكامل بلغة Rust مع نفس السلوك والواجهة العربية.
+- حُذف متصفح التحقق الاختياري (`stealth_browser.py` / Playwright) لأنه كان غير مستخدم، ولالتزام البناء بلا OpenSSL.
+- حُذفت ملفات نشر Heroku/Render/Railway/Fly القديمة الخاصة بـ Python؛ بقي Docker و systemd.
 
 ## حدود معروفة
 
