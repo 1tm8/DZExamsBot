@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS items (
     pdf_url TEXT,
     solution INTEGER DEFAULT 0,
     tags TEXT DEFAULT '',
+    published INTEGER DEFAULT 0,
     updated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_items_level ON items(level, subject);
@@ -54,11 +55,15 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS subscribers (
+    chat_id INTEGER PRIMARY KEY,
+    added_at INTEGER
+);
 "#;
 
 const INSERT_SQL: &str = "INSERT INTO items(token, kind, url, title, level, subject,
-                                 section, stream, year, solution, tags, updated_at)
-   VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                                 section, stream, year, solution, tags, published, updated_at)
+   VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12)
    ON CONFLICT(token) DO UPDATE SET
      title=excluded.title,
      year=excluded.year,
@@ -155,6 +160,13 @@ impl Indexer {
         }
         if !cols.iter().any(|c| c == "tags") {
             conn.execute("ALTER TABLE items ADD COLUMN tags TEXT DEFAULT ''", [])?;
+        }
+        if !cols.iter().any(|c| c == "published") {
+            // العناصر الموجودة قبل إضافة العمود تُعدّ منشورة سلفًا لتفادي نشر أرشيف كامل.
+            conn.execute(
+                "ALTER TABLE items ADD COLUMN published INTEGER DEFAULT 1",
+                [],
+            )?;
         }
         Ok(Indexer {
             fetcher,
@@ -413,6 +425,107 @@ impl Indexer {
         rows.next().and_then(|r| r.ok())
     }
 
+    // ─── المشتركون (نشر تلقائي للجديد) ────────────────────────────────
+    /// يضيف محادثة إلى قائمة المشتركين، ويعيد `true` إن كانت جديدة.
+    pub fn add_subscriber(&self, chat_id: i64) -> bool {
+        let db = self.db.lock().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        db.execute(
+            "INSERT OR IGNORE INTO subscribers(chat_id, added_at) VALUES(?1,?2)",
+            params![chat_id, now],
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    }
+
+    /// يحذف محادثة من المشتركين، ويعيد `true` إن كانت موجودة.
+    pub fn remove_subscriber(&self, chat_id: i64) -> bool {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "DELETE FROM subscribers WHERE chat_id = ?1",
+            params![chat_id],
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    }
+
+    pub fn is_subscriber(&self, chat_id: i64) -> bool {
+        let db = self.db.lock().unwrap();
+        db.query_row(
+            "SELECT 1 FROM subscribers WHERE chat_id = ?1",
+            params![chat_id],
+            |_| Ok(true),
+        )
+        .unwrap_or(false)
+    }
+
+    pub fn subscribers(&self) -> Vec<i64> {
+        let db = self.db.lock().unwrap();
+        let mut out = Vec::new();
+        if let Ok(mut stmt) = db.prepare("SELECT chat_id FROM subscribers") {
+            if let Ok(rows) = stmt.query_map([], |r| r.get::<_, i64>(0)) {
+                for r in rows.flatten() {
+                    out.push(r);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn subscriber_count(&self) -> i64 {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT COUNT(*) FROM subscribers", [], |r| r.get(0))
+            .unwrap_or(0)
+    }
+
+    // ─── النشر التلقائي ──────────────────────────────────────────────
+    /// عناصر لم تُنشر بعد (وصلت حديثًا) بحدّ أقصى.
+    pub fn unpublished_items(&self, limit: usize) -> Vec<Item> {
+        let db = self.db.lock().unwrap();
+        let mut out = Vec::new();
+        if let Ok(mut stmt) =
+            db.prepare("SELECT * FROM items WHERE published = 0 ORDER BY id LIMIT ?1")
+        {
+            if let Ok(rows) = stmt.query_map(params![limit as i64], row_to_item) {
+                for r in rows.flatten() {
+                    out.push(r);
+                }
+            }
+        }
+        out
+    }
+
+    /// عدد العناصر المنتظرة للنشر.
+    pub fn pending_publish_count(&self) -> i64 {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT COUNT(*) FROM items WHERE published = 0", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0)
+    }
+
+    /// يعلّم عناصر (بالرمز token) كمُنشَرة.
+    pub fn mark_published(&self, tokens: &[String]) {
+        if tokens.is_empty() {
+            return;
+        }
+        let mut db = self.db.lock().unwrap();
+        let tx = match db.transaction() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        {
+            let mut stmt = match tx.prepare("UPDATE items SET published = 1 WHERE token = ?1") {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            for t in tokens {
+                let _ = stmt.execute(params![t]);
+            }
+        }
+        let _ = tx.commit();
+    }
+
     // ─── إحصائيات ────────────────────────────────────────────────────
     pub fn stats(&self) -> Stats {
         let db = self.db.lock().unwrap();
@@ -445,7 +558,15 @@ impl Indexer {
 
     pub fn stats_text(&self) -> String {
         let s = self.stats();
+        let subs = self.subscriber_count();
+        let pending = self.pending_publish_count();
         let mut lines = vec![format!("📚 إجمالي العناصر المفهرسة: {}", s.total)];
+        if subs > 0 {
+            lines.push(format!("👥 المشتركون: {subs}"));
+        }
+        if pending > 0 {
+            lines.push(format!("🆕 بانتظار النشر: {pending}"));
+        }
         for (lv, c) in &s.by_level {
             lines.push(format!("  • {}: {}", catalog::level_name(lv), c));
         }
@@ -481,5 +602,56 @@ impl Indexer {
             );
         }
         "لا توجد فهرسة جارية. استخدم /index <level>".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::warp::WarpManager;
+
+    fn temp_indexer(tag: &str) -> Indexer {
+        let fetcher = Arc::new(Fetcher::new(Arc::new(WarpManager::new())).unwrap());
+        let path = std::env::temp_dir().join(format!("dzx_idx_{}_{}.db", tag, std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        Indexer::new(fetcher, Some(path.to_string_lossy().into_owned())).unwrap()
+    }
+
+    fn item(token: &str) -> Item {
+        Item {
+            token: token.into(),
+            title: format!("عنصر {token}"),
+            url: format!("/ar/1as/math/{token}"),
+            level: "1as".into(),
+            subject: "math".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn new_items_are_unpublished_until_marked() {
+        let idx = temp_indexer("pub");
+        assert_eq!(idx.upsert_items(&[item("a"), item("b")]), 2);
+        assert_eq!(idx.pending_publish_count(), 2);
+        assert_eq!(idx.unpublished_items(10).len(), 2);
+
+        idx.mark_published(&["a".to_string()]);
+        assert_eq!(idx.pending_publish_count(), 1);
+
+        // إعادة الإدراج (تحديث) لا تُلغي علم النشر.
+        idx.upsert_items(&[item("a")]);
+        assert_eq!(idx.pending_publish_count(), 1);
+    }
+
+    #[test]
+    fn subscribers_roundtrip() {
+        let idx = temp_indexer("subs");
+        assert!(idx.add_subscriber(111));
+        assert!(!idx.add_subscriber(111));
+        assert!(idx.is_subscriber(111));
+        assert_eq!(idx.subscriber_count(), 1);
+        assert!(idx.remove_subscriber(111));
+        assert!(!idx.remove_subscriber(111));
+        assert_eq!(idx.subscriber_count(), 0);
     }
 }

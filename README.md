@@ -13,6 +13,8 @@
 - إرسال الـ PDF مباشرة عند الضغط على الملف، مع زر «رجوع» يعيدك لنفس صفحة القائمة.
 - بحث نصي في كل المحتوى المفهرس: `/search كلمة`.
 - فهرسة خلفية يومية تلقائية، وفهرسة يدوية للمشرف: `/indexall`.
+- **نشر تلقائي للجديد**: ما يُفهرس حديثًا يُنشر تلقائيًا في قناة (`PUBLISH_CHAT_ID`) وإلى المشتركين (`/subscribe`).
+- **زاحف مستقل**: `dzexams-crawler` (أو `dzexams-bot --crawl`) يملأ قاعدة البيانات دون تشغيل البوت — مناسب لـ cron.
 
 ## المتطلبات
 
@@ -41,6 +43,10 @@ cargo run --release
 | `PROXY_LIST` | بروكسيات HTTP/SOCKS5 للخروج (اختياري، فاصلة) | — |
 | `AUTO_INDEX_LEVELS` | الأطوار المفهرسة تلقائيًا يوميًا | — (معطلة إن لم تُضبط) |
 | `AUTO_INDEX_HOUR` | ساعة الفهرسة التلقائية | `3` |
+| `PUBLISH_CHAT_ID` | قناة/مجموعة النشر التلقائي (فاصلة لعدة معرفات) | — (معطل) |
+| `PUBLISH_SUBSCRIBERS` | إرسال الجديد للمشتركين عبر `/subscribe` | `true` |
+| `PUBLISH_MAX_PER_RUN` | أقصى عدد عناصر تُنشر في الدورة | `10` |
+| `PUBLISH_INTERVAL_SECS` | الفاصل بين دورات النشر (ثوانٍ) | `600` |
 | `SEARCH_RESULTS_LIMIT` | حد نتائج البحث | `10` |
 | `WARP_FAIL_THRESHOLD` | عتبة الحجب المتتالي قبل تدوير IP | `3` |
 | `WARP_WG_PROFILES` | أنماط ملفات WireGuard للتدوير | `/etc/wireguard/warp*.conf` |
@@ -71,6 +77,8 @@ docker run -d --name dzexams-bot \
 |---|---|---|
 | `/start` | الجميع | القائمة الرئيسية |
 | `/search كلمة` | الجميع | بحث في المحتوى المفهرس |
+| `/subscribe` | الجميع | اشتراك في إشعارات المحتوى الجديد |
+| `/unsubscribe` | الجميع | إلغاء الإشعارات |
 | `/index` | المشرف | فهرسة المستوى الحالي |
 | `/indexall` | المشرف | فهرسة كل الأطوار (~15–25 دقيقة) |
 | `/idxstatus` | المشرف | حالة الفهرسة |
@@ -91,7 +99,8 @@ docker run -d --name dzexams-bot \
 
 ```
 Cargo.toml             # تعريف الحزمة والاعتماديات
-src/main.rs            # نقطة التشغيل (+ --healthcheck / --version)
+src/main.rs            # نقطة التشغيل (+ --crawl / --healthcheck / --version)
+src/bin/crawler.rs     # ثنائي الزاحف المستقل (dzexams-crawler)
 src/lib.rs             # جذر المكتبة
 src/bot.rs             # واجهة تيليغرام (الأزرار، الأوامر، الجلسات)
 src/catalog.rs         # الأطوار، السنوات، الشعب، المواد
@@ -99,13 +108,41 @@ src/config.rs          # إعدادات البيئة
 src/service.rs         # منطق التصفح والجلب
 src/scraper.rs         # تحليل صفحات HTML
 src/fetcher.rs         # عميل HTTP مع التخزين المؤقت وتجاوز الحماية
-src/indexer.rs         # الفهرسة الخلفية وبحث FTS5
+src/indexer.rs         # الفهرسة الخلفية وبحث FTS5 + المشتركون وعلم النشر
+src/publisher.rs       # نشر المحتوى الجديد إلى القنوات والمشتركين
+src/crawler.rs         # منطق الزحف لمرة واحدة (يستعمله bin و --crawl)
 src/dzenc.rs           # فك ترميز روابط الموقع
 src/warp.rs            # تدوير IP عبر WARP/البروكسي عند تكرار الحجب
 Dockerfile             # حاوية Docker (بناء متعدد المراحل)
 systemd/dzexams-bot.service  # تشغيل VPS
 .github/workflows/ci.yml     # CI (fmt, clippy, test, build, audit)
 ```
+
+## الزاحف المستقل والنشر التلقائي
+
+الزاحف يملأ **نفس** قاعدة بيانات البوت (`DB_PATH`) دون تشغيل البوت، فتبقى واجهة البوت سريعة. كل عنصر جديد يُخزَّن بعلم «غير منشور»، ثم ينشره البوت تلقائيًا (قناة + مشتركين) عند أول دورة نشر.
+
+```bash
+# فهرسة كل الأطوار (أو AUTO_INDEX_LEVELS إن ضُبطت) ثم الخروج
+dzexams-crawler
+
+# فهرسة أطوار محدّدة
+dzexams-crawler bac bem
+dzexams-crawler bac,bem        # الصيغة نفسها بفواصل
+
+# أو عبر البوت نفسه
+dzexams-bot --crawl bac bem
+```
+
+مثال cron يومي (بعد منتصف الليل):
+
+```cron
+15 2 * * * cd /opt/dzexams-bot && ./dzexams-crawler >> crawl.log 2>&1
+```
+
+> لنشر الجديد إلى قناة، أضف البوت مشرفًا في القناة واضبط `PUBLISH_CHAT_ID` بمعرّفها. يمكن للمستخدمين أيضًا الاشتراك باستخدام `/subscribe` لتصِلهم ملخّصات الجديد في الخاص.
+
+> ⚠️ إن ضبطت `PUBLISH_CHAT_ID` **قبل** الفهرسة الأولى، فسيُنشر الأرشيف كله تدريجيًا (`PUBLISH_MAX_PER_RUN` في كل دورة). للبدء من الصفر فقط: افهرس أولًا ثم اضبط القناة. العناصر الموجودة قبل إضافة ميزة النشر تُعدّ منشورة سلفًا.
 
 ## الاختبارات
 

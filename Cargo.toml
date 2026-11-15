@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "dzexams-bot"
 path = "src/main.rs"
 
+[[bin]]
+name = "dzexams-crawler"
+path = "src/bin/crawler.rs"
+
 [dependencies]
 # تيليغرام — بدون native-tls لتفادي اعتماد OpenSSL وقت البناء
 teloxide = { version = "0.17", default-features = false, features = ["ctrlc_handler", "rustls"] }

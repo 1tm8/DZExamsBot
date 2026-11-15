@@ -59,6 +59,16 @@ pub struct Config {
     pub auto_index_hour: u32,
     pub index_section_delay: f64,
 
+    // ─── Auto-publish (نشر المحتوى الجديد) ──────────────────────────────
+    /// قنوات/مجموعات يُنشر فيها المحتوى الجديد (فارغة = لا نشر إلى قناة).
+    pub publish_chat_ids: Vec<i64>,
+    /// أقصى عدد عناصر تُنشر في الدورة الواحدة.
+    pub publish_max: usize,
+    /// إرسال ملخّص بالعناصر الجديدة إلى المشتركين عبر /subscribe.
+    pub publish_subscribers: bool,
+    /// الفاصل بين دورات النشر التلقائي (ثوانٍ).
+    pub publish_interval_secs: u64,
+
     // ─── UI ─────────────────────────────────────────────────────────────
     pub items_per_page: usize,
     pub subjects_per_page: usize,
@@ -97,10 +107,26 @@ fn env_f64(key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+fn env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
 fn split_list(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn split_i64_list(raw: &str) -> Vec<i64> {
+    raw.split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
         .collect()
 }
 
@@ -148,6 +174,11 @@ impl Config {
             auto_index_levels: split_list(&std::env::var("AUTO_INDEX_LEVELS").unwrap_or_default()),
             auto_index_hour: env_u64("AUTO_INDEX_HOUR", 3) as u32,
             index_section_delay: env_f64("INDEX_SECTION_DELAY", 1.5),
+
+            publish_chat_ids: split_i64_list(&std::env::var("PUBLISH_CHAT_ID").unwrap_or_default()),
+            publish_max: env_usize("PUBLISH_MAX_PER_RUN", 10).max(1),
+            publish_subscribers: env_bool("PUBLISH_SUBSCRIBERS", true),
+            publish_interval_secs: env_u64("PUBLISH_INTERVAL_SECS", 600).max(30),
 
             items_per_page: env_usize("ITEMS_PER_PAGE", 8).max(1),
             subjects_per_page: env_usize("SUBJECTS_PER_PAGE", 20).max(1),

@@ -2,6 +2,7 @@
 //!
 //! الاستعمال:
 //!   dzexams-bot               تشغيل البوت (polling)
+//!   dzexams-bot --crawl [levels...]  زحف/فهرسة لمرة واحدة ثم الخروج
 //!   dzexams-bot --healthcheck فحص اتصال الشبكة بخدمة تيليغرام (لـ Docker HEALTHCHECK)
 //!   dzexams-bot --version     طباعة الإصدار
 
@@ -16,6 +17,22 @@ async fn main() -> anyhow::Result<()> {
 
     if args.iter().any(|a| a == "--healthcheck") {
         return healthcheck().await;
+    }
+
+    // وضع الزحف المستقل: `--crawl` ثم أسماء الأطوار (مفصولة بفراغ أو فاصلة).
+    if let Some(pos) = args.iter().position(|a| a == "--crawl") {
+        let levels: Vec<String> = args[pos + 1..]
+            .iter()
+            .flat_map(|a| a.split(','))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && !s.starts_with('-'))
+            .collect();
+        let levels = if levels.is_empty() {
+            None
+        } else {
+            Some(levels)
+        };
+        return dzexams_bot::crawler::run(levels).await.map(|_| ());
     }
 
     dzexams_bot::bot::run().await

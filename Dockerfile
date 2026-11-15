@@ -4,15 +4,16 @@ WORKDIR /app
 
 # 1) بناء التبعيات وحدها في طبقة مخزّنة (تُعاد الاستفادة منها عند تغيّر الكود فقط)
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src \
+RUN mkdir -p src/bin \
     && printf 'fn main() {}\n' > src/main.rs \
+    && printf 'fn main() {}\n' > src/bin/crawler.rs \
     && printf '' > src/lib.rs \
     && cargo build --release --locked \
     && rm -rf src
 
 # 2) الكود الحقيقي
 COPY src ./src
-RUN touch src/main.rs src/lib.rs \
+RUN touch src/main.rs src/lib.rs src/bin/crawler.rs \
     && cargo build --release --locked
 
 # ─── مرحلة التشغيل ──────────────────────────────────────────────
@@ -26,6 +27,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/dzexams-bot /usr/local/bin/dzexams-bot
+COPY --from=builder /app/target/release/dzexams-crawler /usr/local/bin/dzexams-crawler
 RUN mkdir -p /app/data/tmp && chown -R botuser:botuser /app
 USER botuser
 

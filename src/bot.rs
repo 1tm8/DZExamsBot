@@ -18,6 +18,7 @@ use crate::catalog;
 use crate::config::{self, CONFIG};
 use crate::fetcher::Fetcher;
 use crate::indexer::Indexer;
+use crate::publisher;
 use crate::scraper::Item;
 use crate::service::{ContentError, ContentService, SubjectKind};
 use crate::warp::WarpManager;
@@ -113,6 +114,8 @@ pub struct BotState {
     pub index_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// آخر وقت تنزيل لكل محادثة (حماية من إغراق الموقع).
     pub last_dl: Mutex<HashMap<i64, Instant>>,
+    /// يمنع تداخل دورتَي نشر متزامنتين (غير متزامن ليبقى المستقبل Send).
+    pub publish_lock: tokio::sync::Mutex<()>,
 }
 
 // ─── أدوات مساعدة ─────────────────────────────────────────────────────────
@@ -1094,6 +1097,32 @@ async fn cmd_status(bot: &Bot, msg: &Message, state: &Arc<BotState>) -> HandlerR
     Ok(())
 }
 
+async fn cmd_subscribe(bot: &Bot, msg: &Message, state: &Arc<BotState>) -> HandlerResult {
+    if state.indexer.add_subscriber(msg.chat.id.0) {
+        bot.send_message(
+            msg.chat.id,
+            "✅ تم اشتراكك. ستصلك الملفات الجديدة تلقائيًا.\nللإلغاء في أي وقت: /unsubscribe",
+        )
+        .await?;
+    } else {
+        bot.send_message(msg.chat.id, "أنت مشترك بالفعل ✅").await?;
+    }
+    Ok(())
+}
+
+async fn cmd_unsubscribe(bot: &Bot, msg: &Message, state: &Arc<BotState>) -> HandlerResult {
+    if state.indexer.remove_subscriber(msg.chat.id.0) {
+        bot.send_message(
+            msg.chat.id,
+            "🔕 أُلغِي اشتراكك. لن تصلك إشعارات المحتوى الجديد.",
+        )
+        .await?;
+    } else {
+        bot.send_message(msg.chat.id, "لست مشتركًا أصلًا.").await?;
+    }
+    Ok(())
+}
+
 async fn cmd_index(bot: &Bot, msg: &Message, state: &Arc<BotState>, args: &str) -> HandlerResult {
     if !admin_only(bot, msg).await {
         return Ok(());
@@ -1155,6 +1184,7 @@ fn spawn_index(state: &Arc<BotState>, bot: &Bot, chat: ChatId, levels: Vec<Strin
             state2.indexer.index_level(lv, None).await;
         }
         state2.indexer.set_running(false);
+        publish_pending(&bot2, &state2).await;
         let text = format!("اكتملت الفهرسة.\n\n{}", state2.indexer.stats_text());
         let _ = bot2.send_message(chat, text).await;
     });
@@ -1232,12 +1262,64 @@ async fn auto_index_loop(state: Arc<BotState>, bot: Bot) {
                 state.indexer.index_level(lv, None).await;
             }
         }
+        publish_pending(&bot, &state).await;
         let _ = bot
             .send_message(
                 ChatId(CONFIG.admin_ids.iter().next().copied().unwrap_or(0)),
                 "اكتملت الفهرسة التلقائية.".to_string(),
             )
             .await;
+    }
+}
+
+// ─── النشر التلقائي للجديد ────────────────────────────────────────────────
+/// ينشر العناصر غير المنشورة إلى القنوات والمشتركين ثم يعلّمها كمُنشَرة.
+async fn publish_pending(bot: &Bot, state: &Arc<BotState>) {
+    let channels = &CONFIG.publish_chat_ids;
+    let subs = if CONFIG.publish_subscribers {
+        state.indexer.subscribers()
+    } else {
+        Vec::new()
+    };
+    // لا أهداف؟ نترك العناصر قيد الانتظار حتى يُضبط هدف لاحقًا.
+    if channels.is_empty() && subs.is_empty() {
+        return;
+    }
+
+    let _guard = state.publish_lock.lock().await;
+    let items = state.indexer.unpublished_items(CONFIG.publish_max);
+    if items.is_empty() {
+        return;
+    }
+
+    for cid in channels {
+        publisher::publish_posts(bot, ChatId(*cid), &items).await;
+    }
+    if !subs.is_empty() {
+        let text = publisher::digest(&items);
+        for s in &subs {
+            publisher::publish_digest(bot, ChatId(*s), &text).await;
+        }
+    }
+
+    let tokens: Vec<String> = items.iter().map(|i| i.token.clone()).collect();
+    state.indexer.mark_published(&tokens);
+    log::info!(
+        "published {} new items ({} channels, {} subscribers)",
+        items.len(),
+        channels.len(),
+        subs.len()
+    );
+}
+
+/// حلقة دورية تنشر ما أضافه أي مصدر (البوت أو الزاحف المستقل).
+async fn publish_loop(state: Arc<BotState>, bot: Bot) {
+    if CONFIG.publish_chat_ids.is_empty() && !CONFIG.publish_subscribers {
+        return;
+    }
+    loop {
+        tokio::time::sleep(Duration::from_secs(CONFIG.publish_interval_secs)).await;
+        publish_pending(&bot, &state).await;
     }
 }
 
@@ -1255,6 +1337,8 @@ async fn on_message(bot: Bot, msg: Message, state: Arc<BotState>) -> ResponseRes
                     Ok(())
                 }
                 "search" => cmd_search(&bot, &msg, &state, &args).await,
+                "subscribe" => cmd_subscribe(&bot, &msg, &state).await,
+                "unsubscribe" => cmd_unsubscribe(&bot, &msg, &state).await,
                 "index" => cmd_index(&bot, &msg, &state, &args).await,
                 "indexall" => cmd_indexall(&bot, &msg, &state).await,
                 "idxstatus" => cmd_idxstatus(&bot, &msg, &state).await,
@@ -1335,6 +1419,7 @@ pub async fn run() -> anyhow::Result<()> {
         sessions: Mutex::new(SessionStore::new(400)),
         index_task: Mutex::new(None),
         last_dl: Mutex::new(HashMap::new()),
+        publish_lock: tokio::sync::Mutex::new(()),
     });
 
     let bot = Bot::new(&CONFIG.bot_token);
@@ -1342,10 +1427,13 @@ pub async fn run() -> anyhow::Result<()> {
         .set_my_commands(vec![
             BotCommand::new("start", "القائمة الرئيسية"),
             BotCommand::new("search", "بحث في المحتوى"),
+            BotCommand::new("subscribe", "إشعارات المحتوى الجديد"),
+            BotCommand::new("unsubscribe", "إلغاء الإشعارات"),
         ])
         .await;
 
     tokio::spawn(auto_index_loop(state.clone(), bot.clone()));
+    tokio::spawn(publish_loop(state.clone(), bot.clone()));
 
     let handler = dptree::entry()
         .branch(Update::filter_message().endpoint(on_message))
