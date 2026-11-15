@@ -1,0 +1,21 @@
+# Fly.io — عدّل app عند أول نشر (fly launch يولّد الاسم)
+app = "dzexams-bot"
+primary_region = "cdg"
+
+# البوت عملية دائمة (polling) بلا منفذ عام — لا قسم [[services]] هنا
+auto_stop_machines = false
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DB_PATH = "/app/data/dzexams.db"
+  TMP_DIR = "/app/data/tmp"
+
+[[mounts]]
+  source = "dzexams_data"
+  destination = "/app/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

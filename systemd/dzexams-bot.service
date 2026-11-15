@@ -1,0 +1,26 @@
+[Unit]
+Description=DzExams Telegram Bot
+After=network-online.target warp-svc.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# عدّل المسار والمستخدم حسب تثبيتك
+User=root
+WorkingDirectory=/opt/dzexams-bot
+ExecStart=/opt/dzexams-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+# متغيرات البيئة (أو استخدم ملف .env في مجلد المشروع)
+EnvironmentFile=-/opt/dzexams-bot/.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dzexams-bot
+
+# إعادة تشغيل آمنة عند الأعطال المتكررة
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
