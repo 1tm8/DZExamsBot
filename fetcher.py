@@ -128,6 +128,7 @@ class Fetcher:
         # عدّاد الحجب المتتالي (يُصفَّر عند أي نجاح)
         self._consecutive_blocked = 0
         self._rotate_lock = asyncio.Lock()
+        self._ua_idx = 0  # موقع UA الحالي في UA_CHAIN
         self.total_requests = 0
         self.total_blocked = 0
         self.total_rotations = 0
@@ -171,7 +172,9 @@ class Fetcher:
         t0 = time.monotonic()
         to = aiohttp.ClientTimeout(total=timeout)
         try:
-            async with session.get(url, timeout=to, proxy=proxy) as r:
+            ua = config.UA_CHAIN[self._ua_idx % len(config.UA_CHAIN)]
+            async with session.get(url, timeout=to, proxy=proxy,
+                                  headers={"User-Agent": ua}) as r:
                 body = await r.read()
                 res = FetchResult(
                     status=r.status,
@@ -210,7 +213,7 @@ class Fetcher:
                   timeout: Optional[int] = None, use_cache: bool = True,
                   allow_rotate: bool = True) -> FetchResult:
         """
-        الجلب الذكي: تخزين مؤقت ← محاولتان بتراجع ← تدوير IP عند تكرار الحجب.
+        الجلب الذكي: تخزين مؤقت ← محاولتان بتراجع ← UA احتياطي ← تدوير IP عند تكرار الحجب.
         """
         if timeout is None:
             timeout = config.PDF_TIMEOUT if as_bytes else config.REQ_TIMEOUT
@@ -247,6 +250,23 @@ class Fetcher:
                     attempt + 1, url, res.status, res.block.value, res.error,
                 )
                 await asyncio.sleep(2 * (attempt + 1))
+
+            # فشلت المحاولتان: جرّب UA التالي في السلسلة قبل تدوير IP
+            if (res.block != BlockType.NOT_FOUND
+                    and self._ua_idx + 1 < len(config.UA_CHAIN)):
+                self._ua_idx += 1
+                log.warning("UA blocked, switching to %s",
+                            config.UA_CHAIN[self._ua_idx])
+                await self._pace()
+                self.total_requests += 1
+                res2 = await self._do_get(url, as_bytes=as_bytes,
+                                          timeout=timeout, proxy=proxy)
+                if res2.ok:
+                    self._consecutive_blocked = 0
+                    if use_cache and not as_bytes:
+                        self.cache.put(cache_key, res2)
+                    return res2
+                res = res2
 
             # فشلت المحاولتان: تحديث عدّاد الحجب
             if res.blocked or res.block in (BlockType.NETWORK, BlockType.TIMEOUT):

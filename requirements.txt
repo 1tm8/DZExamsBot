@@ -1,7 +1,7 @@
-python-telegram-bot[job-queue]>=21.6,<22
-aiohttp>=3.9
-pycryptodome>=3.20
-python-dotenv>=1.0
+python-telegram-bot[job-queue]==21.11.1
+aiohttp==3.14.5
+pycryptodome==4.4.0
+python-dotenv==1.2.4
 
 # اختياري: لحلّال تحقق LiteSpeed (Bot Verification) عبر متصفح حقيقي
 # بعد التثبيت نفّذ: playwright install chromium

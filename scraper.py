@@ -13,7 +13,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional
-from urllib.parse import urljoin
 
 import config
 from dzenc import dz_decode, content_path

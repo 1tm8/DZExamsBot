@@ -11,6 +11,7 @@ import html
 import logging
 import os
 import re
+import secrets
 import time
 from collections import OrderedDict
 from typing import Optional
@@ -30,7 +31,6 @@ from fetcher import Fetcher
 from warp import WarpManager
 from service import ContentService, ContentError
 from indexer import Indexer
-from dzenc import dz_decode
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,11 +50,12 @@ class SessionStore:
     def __init__(self, cap: int = 400):
         self.cap = cap
         self._d = OrderedDict()
-        self._ctr = 0
 
     def put(self, value: dict) -> str:
-        self._ctr = (self._ctr + 1) % 10**9
-        key = f"{self._ctr:08d}"
+        # مفاتيح عشوائية غير قابلة للتخمين (كانت عدّادًا متسلسلًا)
+        key = secrets.token_hex(4)
+        while key in self._d:
+            key = secrets.token_hex(4)
         self._d[key] = value
         self._d.move_to_end(key)
         while len(self._d) > self.cap:
@@ -66,13 +67,6 @@ class SessionStore:
         if v is not None:
             self._d.move_to_end(key)
         return v
-
-    def put_or_key(self, value: dict, existing: Optional[str] = None) -> str:
-        """إعادة استخدام المفتاح إن وُجد وإلا إنشاء مفتاح جديد."""
-        if existing and self.get(existing) is not None:
-            return existing
-        return self.put(value)
-
 
 sessions = SessionStore()
 
@@ -87,28 +81,6 @@ def trim_btn(s: str, n: int = 58) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def split_text(text: str, limit: int = 4000) -> list:
-    """تقسيم نص طويل إلى أجزاء على حدود الفقرات."""
-    if len(text) <= limit:
-        return [text]
-    parts, cur = [], ""
-    for para in text.split("\n\n"):
-        if len(cur) + len(para) + 2 <= limit:
-            cur = (cur + "\n\n" + para) if cur else para
-        else:
-            if cur:
-                parts.append(cur)
-            if len(para) > limit:
-                for i in range(0, len(para), limit):
-                    parts.append(para[i:i + limit])
-                cur = ""
-            else:
-                cur = para
-    if cur:
-        parts.append(cur)
-    return parts or [text]
-
-
 def stage_of_level(level: str) -> str:
     for st, (_name, levels) in catalog.STAGES.items():
         if level in levels:
@@ -121,17 +93,6 @@ def stream_ar(level: str, code: str) -> str:
     if level in catalog.SCHOOL_STREAMS:
         return catalog.SCHOOL_STREAMS[level].get(code, code)
     return catalog.STREAMS.get(code, code)
-
-
-def back_label(level: str, subject: str, section: str, stream: str) -> str:
-    """نص زر العنصر الحالي في القائمة."""
-    parts = []
-    if section:
-        parts.append(catalog.SECTIONS.get(section, section))
-    elif stream:
-        parts.append(stream_ar(level, stream))
-    parts.append(catalog.subject_ar(subject))
-    return " — ".join(parts)
 
 
 # ─── لوحات الأزرار ────────────────────────────────────────────────────────
@@ -585,6 +546,15 @@ async def cb_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("العنصر غير متوفر.", show_alert=True)
         return
     it = items[i]
+    # حد التحميل لكل مستخدم: مهلة بين ملف وآخر (حماية من إغراق الموقع)
+    now = time.monotonic()
+    last = context.chat_data.get("last_dl_ts", 0.0)
+    wait = int(config.USER_DL_COOLDOWN - (now - last))
+    if wait > 0:
+        await q.answer(f"انتظر {wait} ثوانٍ ثم أعد المحاولة.",
+                       show_alert=True)
+        return
+    context.chat_data["last_dl_ts"] = now
     await q.answer("جاري التحميل…")
 
     item_obj = _dict_to_item(it)
@@ -624,6 +594,21 @@ async def cb_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         + ("\n✅ الحل مرفق مع الملف." if has_solution else "\nالحل غير متوفر لهذا الملف.")
     )
 
+    # حد تيليغرام: ملف أكبر من 49MB يُرسل كرابط لا كمستند
+    oversize = False
+    if pdf_path:
+        try:
+            if os.path.getsize(pdf_path) > config.TELEGRAM_DOC_LIMIT:
+                oversize = True
+        except OSError:
+            pass
+        if oversize:
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+            pdf_path = None
+
     if pdf_path:
         with open(pdf_path, "rb") as fh:
             await context.bot.send_document(
@@ -640,8 +625,12 @@ async def cb_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     else:
         kb = _item_markup(it, key, i, site=True)
-        note = ("لم أستطع تنزيل ملف PDF مباشرة.\n"
-                "افتحه من زر الموقع بالأسفل.")
+        if oversize:
+            note = ("الملف كبير (أكثر من 49MB) — لا يمكن إرساله عبر تيليغرام.\n"
+                    "افتحه من زر الموقع بالأسفل.")
+        else:
+            note = ("لم أستطع تنزيل ملف PDF مباشرة.\n"
+                    "افتحه من زر الموقع بالأسفل.")
         await context.bot.send_message(
             chat_id, note, reply_markup=kb, parse_mode="HTML")
 
@@ -790,9 +779,6 @@ async def _run_indexing(level: str, chat_id: int, context):
 async def _run_indexing_all(chat_id: int, context):
     try:
         for lv in catalog.LEVELS:
-            if indexer.progress.get("running"):
-                # استمرار إن كانت دورة السلسلة نفسها
-                pass
             await indexer.index_level(lv)
     except Exception as e:
         log.exception("indexall failed: %s", e)
@@ -902,6 +888,14 @@ async def _on_error(update, context):
         pass
 
 
+async def _post_stop(app):
+    """إغلاق جلسة HTTP عند إيقاف البوت (لا تترك جلسة مفتوحة)."""
+    try:
+        await fetcher.close()
+    except Exception:
+        pass
+
+
 async def _post_init(app):
     """قائمة الأوامر الظاهرة للمستخدمين: أوامر المستخدم فقط."""
     try:
@@ -930,6 +924,7 @@ def main():
             pool_timeout=10.0,
         ))
         .post_init(_post_init)
+        .post_stop(_post_stop)
         .build()
     )
     app.add_error_handler(_on_error)

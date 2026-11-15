@@ -30,6 +30,13 @@ BASE_URL = "https://www.dzexams.com"
 # agent, so Cloudflare WAF passes it through without a JS challenge.
 BYPASS_UA = "Mediapartners-Google"
 
+# سلسلة User-Agent للتجاوز: الأساسي أولًا، والباقي احتياط عند حجب الأساسي.
+UA_CHAIN = [
+    "Mediapartners-Google",
+    "AdsBot-Google-Mobile",
+    "Googlebot/2.1 (+http://www.google.com/bot.html)",
+]
+
 # Fallback UA used only for the optional stealth-browser flow.
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -67,7 +74,7 @@ PLAYWRIGHT_HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "1") == "1"
 # ─── Storage ─────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "dzexams.db"))
-TMP_DIR = os.getenv("TMP_DIR", "/tmp/dzexams_bot")
+TMP_DIR = os.getenv("TMP_DIR", "/tmp/dzexams_bot")  # nosec B108: app-created dir, files deleted after use
 
 # ─── Background indexing ─────────────────────────────────────────────────
 # Comma-separated levels auto-indexed daily ("" = disabled), e.g. "bac,bem,3as"
@@ -79,3 +86,8 @@ INDEX_SECTION_DELAY = float(os.getenv("INDEX_SECTION_DELAY", "1.5"))
 ITEMS_PER_PAGE = int(os.getenv("ITEMS_PER_PAGE", "8"))
 SUBJECTS_PER_PAGE = int(os.getenv("SUBJECTS_PER_PAGE", "20"))
 SEARCH_RESULTS_LIMIT = int(os.getenv("SEARCH_RESULTS_LIMIT", "10"))
+
+# مهلة بين تحميلين لنفس المستخدم (ثوانٍ) — حماية من إغراق الموقع
+USER_DL_COOLDOWN = int(os.getenv("USER_DL_COOLDOWN", "10"))
+# حد تيليغرام لإرسال الملفات: ما فوقه يُرسل كرابط فقط
+TELEGRAM_DOC_LIMIT = 49 * 1024 * 1024

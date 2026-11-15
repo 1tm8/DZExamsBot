@@ -97,7 +97,6 @@ async def solve_and_get_cookies(url: str, max_wait: int = 25) -> Optional[dict]:
 
 async def inject_cookies(fetcher, cookies: dict):
     """إدخال الكوكيز في جلسة aiohttp الخاصة بـ fetcher."""
-    import aiohttp
     session = await fetcher._ensure_session()
     from yarl import URL
     jar = session.cookie_jar

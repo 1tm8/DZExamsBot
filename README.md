@@ -56,7 +56,7 @@ python bot.py
 | **Render** | `render.yaml` | زر النشر أعلاه. الخدمة Worker + قرص 1GB عند `/app/data`. خطة Starter المدفوعة مطلوبة للـ Worker. |
 | **Fly.io** | `fly.toml` + `Dockerfile` | `fly launch --no-deploy` ثم `fly volumes create dzexams_data -s 1` ثم `fly secrets set BOT_TOKEN=… ADMIN_IDS=…` ثم `fly deploy`. |
 | **Heroku** | `Procfile` + `runtime.txt` + `app.json` | يعمل كـ worker dyno. قرص Heroku مؤقت: قاعدة البيانات تُفقد عند إعادة التشغيل — أعد الفهرسة بـ `/indexall` بعد كل إعادة نشر. |
-| **VPS خاص** | `systemd/dzexams-bot.service` | انسخ الملف إلى `/etc/systemd/system/`، عدّل المسارات والتوكن، ثم `systemctl enable --now dzexams-bot`. |
+| **VPS خاص** | `systemd/dzexams-bot.service` | أنشئ المستخدم `botuser` وملّكه المجلد (`chown -R botuser:botuser /opt/dzexams-bot`)، انسخ الملف إلى `/etc/systemd/system/`، عدّل المسارات والتوكن، ثم `systemctl enable --now dzexams-bot`. الخدمة تعمل بلا صلاحيات root. |
 
 **Cloudflare Workers غير مدعومة بهذه النسخة**: الـ Workers لا تشغّل عملية دائمة (polling مستحيل) ولا قرصًا محليًا لقاعدة SQLite — استضافتها تتطلب إعادة كتابة البوت على نمط webhook مع قاعدة خارجية، وهذا خارج نطاق هذا الإصدار.
 
@@ -77,7 +77,9 @@ python bot.py
 
 - الموقع محمي بـ Cloudflare. البوت يصل إليه بعميل HTTP عادي مع User-Agent `Mediapartners-Google` (ثغرة معروفة في الحماية) — إذا أغلقها الموقع يتوقف البوت عن الجلب ويُظهر رسالة خطأ واضحة، لا يفشل بصمت.
 - المحتوى يُخزَّن كبيانات وصفية + روابط فقط؛ الـ PDF يُجلب فقط عند طلب مستخدم محدد، ولا يُنزَّل جماعيًا.
-- ملفات ≥ 49MB تُرسل كرابط فقط (حد تيليغرام 50MB للبوتات).
+- ملفات ≥ 49MB تُرسل كرابط فقط (حد تيليغرام 50MB للبوتات) — يُفحص الحجم قبل الإرسال.
+- مهلة 10 ثوانٍ بين تحميلين لنفس المستخدم (حماية من إغراق الموقع).
+- سلسلة User-Agent احتياطية: إن حُجب الأساسي (Mediapartners-Google) يُجرَّب AdsBot ثم Googlebot.
 
 ## بنية المشروع
 
@@ -91,13 +93,14 @@ fetcher.py             # عميل HTTP مع التخزين المؤقت
 indexer.py             # الفهرسة الخلفية وبحث FTS5
 dzenc.py               # فك ترميز روابط الموقع
 stealth_browser.py     # متصفح احتياطي (غير مستخدم حاليًا)
-warp.py                # إدارة WARP/البروكسي (غير مستخدم حاليًا)
+warp.py                # تدوير IP عبر WARP/البروكسي عند تكرار الحجب (يستدعيه fetcher)
 smoke_test.py          # اختبار حي شامل (15 اختبارًا)
 Dockerfile             # حاوية Docker
 fly.toml               # نشر Fly.io
 railway.json           # نشر Railway
 render.yaml            # نشر Render
 Procfile / runtime.txt / app.json  # نشر Heroku
+.github/workflows/ci.yml          # فحص أسبوعي (ruff, bandit, pip-audit)
 systemd/dzexams-bot.service        # تشغيل VPS
 ```
 
