@@ -142,6 +142,11 @@ impl Indexer {
             }
         }
         let conn = Connection::open(&path)?;
+        // WAL + مهلة انتظار: تسمح بتشغيل البوت والزاحف المستقل معًا على نفس
+        // ملف قاعدة البيانات دون أخطاء «database is locked».
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let _ = conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()));
+        let _ = conn.execute_batch("PRAGMA synchronous=NORMAL;");
         conn.execute_batch(SCHEMA)?;
         // ترحيل لقواعد قديمة: أضف الأعمدة الجديدة إن غابت
         let mut cols: Vec<String> = Vec::new();
